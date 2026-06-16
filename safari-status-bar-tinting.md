@@ -47,83 +47,231 @@ Safari samples the `background-color` of elements that meet ALL of these criteri
 
 ---
 
-## The Two-Element Pattern Explained
+## The Runtime Re-Sample Problem
 
-Using the following code pattern (from `page.tsx` lines 8–13):
+Safari 26 has a **live observer** that watches for `background-color` changes on qualifying elements. However, the observer is inconsistent — some transitions are silently ignored:
+
+| Transition | Detected? |
+|------------|-----------|
+| Color A → Color B | ✅ Usually |
+| Color → `transparent` | ❌ Often missed |
+| `transparent` → Color | ❌ Often missed |
+| Property removed entirely (no `background-color`) | ❌ Never detected |
+
+### The Fix: Meta Tag `+ "fe"` Dance
+
+Even though Safari 26 ignores `<meta name="theme-color">` for the *source* of the tint, **changing the meta tag's `content` attribute still pokes Safari's internal observer** and forces a full re-sample of all DOM tinting sources (body + fixed elements).
+
+The proven 3-step pattern:
 
 ```tsx
-{/* Line 8 — Controls the status bar tint */}
-<nav className="fixed top-0 w-full h-24 z-[100] transition-colors duration-500 pointer-events-none border"></nav>
+// Step 1: Set body background + meta to target immediately
+document.body.style.backgroundColor = targetColor;
+meta.setAttribute("content", targetColor);
 
-{/* Line 9 — Controls safe zone behavior */}
-<div className="fixed inset-0 z-[80] transition-all duration-500 border pointer-events-none">
-  <div className="absolute inset-0 bg-transparent transition-opacity duration-500" />
+// Step 2: Next frame — nudge meta with "+fe" suffix
+requestAnimationFrame(() => {
+  meta.setAttribute("content", targetColor + "fe");
+
+  // Step 3: Frame after — restore clean value
+  requestAnimationFrame(() => {
+    meta.setAttribute("content", targetColor);
+  });
+});
+```
+
+The `+ "fe"` suffix creates a slightly different (invalid) color value that Safari's observer registers as a *change*, waking it up. The clean value is restored immediately after. This double-change is imperceptible to users but forces Safari to re-sample every qualifying element.
+
+### Complete Hook Implementation
+
+```tsx
+function useSafariTintForce(targetColor: string) {
+  const metaRef = useRef<HTMLMetaElement | null>(null);
+  const prevRef = useRef(targetColor);
+
+  // Ensure <meta name="theme-color"> exists in <head>
+  useEffect(() => {
+    let meta = document.querySelector<HTMLMetaElement>(
+      'meta[name="theme-color"]',
+    );
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.name = "theme-color";
+      meta.content = "";
+      document.head.appendChild(meta);
+    }
+    metaRef.current = meta;
+  }, []);
+
+  useEffect(() => {
+    const meta = metaRef.current;
+    if (!meta) return;
+    if (targetColor === prevRef.current) return;
+    prevRef.current = targetColor;
+
+    const color = targetColor || "transparent";
+    const metaColor = targetColor || "#ffffff";
+
+    document.body.style.backgroundColor = color;
+    meta.setAttribute("content", metaColor);
+
+    const r1 = requestAnimationFrame(() => {
+      meta.setAttribute("content", metaColor + "fe");
+      const r2 = requestAnimationFrame(() => {
+        meta.setAttribute("content", metaColor);
+      });
+      return () => cancelAnimationFrame(r2);
+    });
+    return () => cancelAnimationFrame(r1);
+  }, [targetColor]);
+}
+```
+
+### What Does NOT Work
+
+These approaches were tested and **failed** to trigger Safari's observer:
+
+| Attempt | Why it failed |
+|---------|---------------|
+| Changing `el.style.backgroundColor` directly | Observer skips transparent ↔ color transitions |
+| `rAF` flicker: `transparent → rgb(0,0,0,0.004) → transparent` | Near-identical values ignored |
+| DOM unmount/remount via React `key` | Observer didn't re-trigger on re-insertion |
+| Tailwind classes (`bg-blue-600` → `""`) | Removing the property entirely = no change detected |
+
+---
+
+## The Tinting Strip Pattern
+
+You don't need your visible header to be the tinting source. A **thin, invisible strip** at the very top of the page can control the status bar independently:
+
+```html
+<!-- Invisible 4px strip — Safari samples THIS for status bar color -->
+<div
+  aria-hidden="true"
+  style="position: fixed; top: 0; width: 100%; height: 4px;
+         background-color: #2563eb; pointer-events: none; z-index: 200"
+/>
+
+<!-- Visible header — can be ANY color, independent of status bar -->
+<header
+  style="position: fixed; top: 0; width: 100%; height: 96px;
+         background-color: #ffffff; z-index: 100"
+>
+  Your site header...
+</header>
+```
+
+**Why 4px?** Safari's minimum height threshold is 3px. At 4px the strip is reliably sampled while being invisible to users.
+
+### Architecture Diagram
+
+```
+┌── Tinting Strip (4px, z-200) ──┐  ← Safari samples THIS
+├── Visible Header (h-24, z-100) ─┤  ← Users see THIS (any color)
+│                                 │
+│         Page Content            │  ← Body background (independent)
+│                                 │
+└─────────────────────────────────┘
+```
+
+This separation lets you:
+- Set the status bar to `Red` while the header is `White`
+- Make the status bar transparent while keeping a visible colored header
+- Tint the status bar without any visible header at all
+
+---
+
+## The Two-Element Pattern (Safe Zone Control)
+
+Using two fixed elements together:
+
+```tsx
+{/* Element 1 — Controls status bar tint */}
+<header
+  className="fixed top-0 w-full h-24 z-100 pointer-events-none"
+  style={{ backgroundColor: statusColor }}
+/>
+
+{/* Element 2 — Safe zone enforcer overlay */}
+<div className="fixed inset-0 z-80 pointer-events-none">
+  <div className="absolute inset-0 bg-transparent" />
 </div>
 ```
 
----
+| Element | Purpose |
+|---------|---------|
+| Fixed `<header>` at top | Tinting controller — its `background-color` determines the status bar appearance |
+| Fixed fullscreen `<div>` | Safe zone enforcer — ensures content respects safe-area insets |
 
-### Element 1: The Fixed `<nav>` (Line 8)
+### Behavior Matrix
 
-This element is the **tinting controller** for the status bar.
-
-**Why it works:**
-- `fixed top-0` — positions it at the very top edge (within 4px of top)
-- `w-full` — 100% width (>= 80% width)
-- `h-24` — 96px tall (>= 3px height)
-- `pointer-events-none` — Safari still samples it
-
-**Behavior:**
-
-| State | Result |
-|-------|--------|
-| **No `background-color` set** (current state — only `border`) | Status bar becomes **transparent**. Content flows **behind** the status bar. The user sees content bleeding through the status bar area. |
-| **`background-color` added** (e.g., `bg-white`) | Status bar is **tinted** with that color. Content stays **in the safe zone** below the status bar. The status bar is opaque with the specified color. |
-| **Element removed entirely** | Safari falls back to `<body>` background. Content stays **in the safe zone** below the status bar. No transparency. |
-
-### Element 2: The Fixed Fullscreen `<div>` (Line 9)
-
-This element acts as a **safe zone enforcer**. Its child `<div>` with `bg-transparent` ensures that when the nav has no background, Safari still respects the safe area insets for regular content while the overlay provides a transparent layer for the status bar to sample.
+| Status Bar Color | Overlay | Result |
+|-----------------|---------|--------|
+| `transparent` (no bg) | ON | **Transparent status bar** — content flows behind it |
+| Any color (e.g. `#2563eb`) | ON | **Tinted status bar** — matches the color, content in safe zone |
+| N/A (header removed) | ON | Falls back to `<body>` background, content in safe zone |
+| Any | OFF | Falls back to `<body>` background |
 
 ---
 
-## The Three Scenarios (Summary Table)
+## Inline Styles vs Tailwind Classes
 
-| Scenario | Line 8 (nav) | Line 9 (overlay) | Status Bar | Content Position |
-|----------|-------------|-------------------|------------|-----------------|
-| **Transparent header** | Present, **no background** | Present | Transparent | Behind status bar |
-| **Colored header** | Present, **with background** | Present | Tinted to nav color | In safe zone (below status bar) |
-| **Default** | Removed | Present | Falls back to body color | In safe zone (below status bar) |
+**Always use inline styles** for the `background-color` that Safari samples. Tailwind classes are unreliable because:
+
+```tsx
+// ❌ BROKEN — Tailwind class interpolation
+// When navBg = "", the background-color property is REMOVED entirely.
+// Safari's observer sees no property → no change → no re-sample.
+<nav className={`fixed top-0 … ${navBg}`} />
+
+// ✅ WORKS — Inline style
+// background-color is ALWAYS explicitly set, even when "transparent".
+// Safari's observer sees every value change.
+<nav style={{ backgroundColor: navBg || "transparent" }} />
+```
 
 ---
 
 ## Key Takeaways
 
 1. **`viewport-fit=cover` does not control tinting.** Don't rely on it for status bar color.
-2. **A `fixed` element at the top with no background** is the trick to get a transparent status bar — Safari samples the transparent background and renders the status bar as clear.
-3. **Adding a background to that same fixed element** instantly tints the status bar to match.
-4. **`pointer-events: none` does not prevent Safari sampling.** You can use this to create invisible tinting controllers that don't interfere with user interaction.
-5. **The fullscreen overlay (line 9)** works as a complementary mechanism — ensuring content behaves correctly in the safe zone when the tinting element has no background.
-6. **Safari uses luma (perceived brightness)** of the sampled color to determine whether status bar text/icons should be dark or light.
+2. **Runtime re-sampling requires the meta tag `+ "fe"` dance.** Safari's live observer ignores many transitions unless poked via `<meta name="theme-color">` manipulation.
+3. **Use inline styles, not Tailwind classes.** The `background-color` property must always be explicitly present for Safari to track changes.
+4. **A 4px fixed strip at the top** can control the status bar independently of your visible header.
+5. **`pointer-events: none` does not prevent Safari sampling.** Use it to create invisible tinting controllers.
+6. **The fullscreen overlay** (fixed `inset-0` with transparent background) acts as a safe zone enforcer alongside the tinting controller.
+7. **Safari uses luma (perceived brightness)** of the sampled color to determine whether status bar text/icons should be dark or light.
 
 ---
 
 ## Practical Usage
 
-To dynamically control the status bar tint:
-
 ```tsx
 // Transparent status bar (content flows behind)
-<nav className="fixed top-0 w-full h-6 pointer-events-none" />
+<header style={{
+  position: "fixed", top: 0, width: "100%", height: "4px",
+  backgroundColor: "transparent", pointerEvents: "none"
+}} />
 
-// Tinted status bar (matches your brand color)
-<nav className="fixed top-0 w-full h-6 bg-blue-600 pointer-events-none" />
+// Tinted status bar
+<header style={{
+  position: "fixed", top: 0, width: "100%", height: "4px",
+  backgroundColor: "#2563eb", pointerEvents: "none"
+}} />
 
-// Toggle between states with state management
-<nav className={`fixed top-0 w-full h-6 pointer-events-none transition-colors duration-500 ${isScrolled ? 'bg-white' : ''}`} />
+// With the re-sample hook
+function MyPage() {
+  const [color, setColor] = useState("#ffffff");
+  useSafariTintForce(color);
+
+  return (
+    <header style={{
+      position: "fixed", top: 0, width: "100%", height: "4px",
+      backgroundColor: color, pointerEvents: "none"
+    }} />
+  );
+}
 ```
-
-> **Note:** The element only needs to be ≥ 3px tall to be sampled. You don't need a full-height nav — a thin 6px strip at the top is sufficient to control the entire status bar tint.
 
 ---
 
@@ -132,3 +280,5 @@ To dynamically control the status bar tint:
 - [Safari Color Tinting — Demo & Documentation](https://safari-color-tinting.pages.dev/)
 - [GitHub: andesco/safari-color-tinting](https://github.com/andesco/safari-color-tinting)
 - [Luma: Apple & Perceived Brightness](https://github.com/andesco/safari-color-tinting/blob/main/luma.md)
+- [Live Demo (this project)](https://next-webkit-bar.vercel.app/)
+- [Repository](https://github.com/ianfebi01/next-webkit-bar)

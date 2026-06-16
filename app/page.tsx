@@ -1,39 +1,112 @@
 "use client";
 
 import Image from "next/image";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-const PRESET_COLORS = [
+// CSS color values (not Tailwind classes) — inline styles for Safari's observer.
+const COLORS = [
   { label: "None", value: "" },
-  { label: "White", value: "bg-white" },
-  { label: "Black", value: "bg-black" },
-  { label: "Blue", value: "bg-blue-600" },
-  { label: "Red", value: "bg-red-500" },
-  { label: "Green", value: "bg-emerald-500" },
-  { label: "Indigo", value: "bg-indigo-600" },
+  { label: "White", value: "#ffffff" },
+  { label: "Black", value: "#000000" },
+  { label: "Blue", value: "#2563eb" },
+  { label: "Red", value: "#ef4444" },
+  { label: "Green", value: "#10b981" },
+  { label: "Indigo", value: "#4f46e5" },
+  { label: "Amber", value: "#d97706" },
+  { label: "Pink", value: "#ec4899" },
 ] as const;
 
+const cssColor = (v: string) => v || "transparent";
+const isTint = (v: string) => v !== "" && v !== "transparent";
+
+/**
+ * Force Safari 26 to re-sample tinting.
+ *
+ * Proven pattern from andesco/safari-color-tinting research:
+ * 1. Set body bg + meta to target
+ * 2. Next frame: nudge meta with "+fe" suffix
+ * 3. Frame after: restore clean value
+ *
+ * This 3-step dance pokes Safari's internal observer.
+ */
+function useSafariTintForce(targetColor: string) {
+  const metaRef = useRef<HTMLMetaElement | null>(null);
+  const prevRef = useRef(targetColor);
+
+  useEffect(() => {
+    let meta = document.querySelector<HTMLMetaElement>(
+      'meta[name="theme-color"]',
+    );
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.name = "theme-color";
+      meta.content = "";
+      document.head.appendChild(meta);
+    }
+    metaRef.current = meta;
+  }, []);
+
+  useEffect(() => {
+    const meta = metaRef.current;
+    if (!meta) return;
+    if (targetColor === prevRef.current) return;
+    prevRef.current = targetColor;
+
+    const color = cssColor(targetColor);
+    const metaColor = targetColor || "#ffffff";
+
+    document.body.style.backgroundColor = color;
+    meta.setAttribute("content", metaColor);
+
+    const r1 = requestAnimationFrame(() => {
+      meta.setAttribute("content", metaColor + "fe");
+      const r2 = requestAnimationFrame(() => {
+        meta.setAttribute("content", metaColor);
+      });
+      return () => cancelAnimationFrame(r2);
+    });
+    return () => cancelAnimationFrame(r1);
+  }, [targetColor]);
+}
+
 export default function Home() {
-  const [navBg, setNavBg] = useState("");
+  const [statusColor, setStatusColor] = useState("");
+  const [bodyColor, setBodyColor] = useState("");
   const [overlayVisible, setOverlayVisible] = useState(true);
 
-  const hasTint = navBg !== "";
+  // Meta-tag dance for Safari re-sampling, driven by status bar color.
+  useSafariTintForce(statusColor);
+
+  // Apply body background independently.
+  useEffect(() => {
+    document.body.style.backgroundColor = cssColor(bodyColor);
+  }, [bodyColor]);
+
   const scenario = !overlayVisible
-    ? "No overlay — default fallback to <body>"
-    : hasTint
-      ? "Tinted status bar (colored nav background)"
-      : "Transparent status bar (nav with no background)";
+    ? "No overlay — fallback to <body>"
+    : isTint(statusColor)
+      ? `Status bar tinted (${statusColor || "color"})`
+      : "Status bar transparent";
 
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      {/* ---- Safari Tinting Controller: Fixed <nav> at top ---- */}
-      {/* No background → transparent status bar. With background → tinted status bar. */}
-      <nav
-        className={`fixed top-0 w-full h-24 z-[100] transition-colors duration-500 pointer-events-none border ${navBg}`}
+      {/* ---- Tinting Strip (4px, invisible) ---- */}
+      {/* Safari 26 samples this for the status bar color. */}
+      {/* Keep it thin (≥3px), full-width, at the very top. */}
+      <div
+        aria-hidden="true"
+        className="fixed top-0 w-full z-[200] pointer-events-none"
+        style={{ height: "4px", backgroundColor: cssColor(statusColor) }}
       />
 
-      {/* ---- Safe Zone Enforcer: Fixed fullscreen overlay ---- */}
-      {/* When present, ensures content respects safe-area behavior alongside the nav. */}
+      {/* ---- Visible Header ---- */}
+      {/* Its background is what Safari samples for the status bar tint. */}
+      <header
+        className="fixed top-0 w-full h-24 z-100 transition-colors duration-500 pointer-events-none border"
+        style={{ backgroundColor: cssColor(statusColor) }}
+      />
+
+      {/* ---- Safe Zone Enforcer ---- */}
       {overlayVisible && (
         <div
           className="fixed inset-0 z-[80] transition-all duration-500 border pointer-events-none"
@@ -58,8 +131,7 @@ export default function Home() {
             Safari Status Bar Tinting Test
           </h1>
           <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Use the controls below to toggle between transparent and tinted
-            status bar states. Open this page in{" "}
+            Use the controls below. Open in{" "}
             <strong>Safari 26+ on iOS or macOS</strong> to see the effect.
           </p>
         </div>
@@ -90,57 +162,76 @@ export default function Home() {
         </div>
       </main>
 
-      {/* ---- Second section (scroll target) ---- */}
+      {/* ---- Section 2 ---- */}
       <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-zinc-100 dark:bg-zinc-900 sm:items-start">
         <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
           <h2 className="max-w-xs text-2xl font-semibold leading-9 tracking-tight text-black dark:text-zinc-50">
-            Scroll to see status bar behavior
+            Scroll to see behavior
           </h2>
           <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            As you scroll, observe how the status bar tint remains consistent.
-            Safari re-samples the fixed element&apos;s background in real time.
+            Safari re-samples the fixed element&apos;s background in real time
+            as you scroll.
           </p>
         </div>
       </main>
 
-      {/* ---- Third section (scroll target) ---- */}
+      {/* ---- Section 3 ---- */}
       <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
         <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
           <h2 className="max-w-xs text-2xl font-semibold leading-9 tracking-tight text-black dark:text-zinc-50">
-            Try different colors
+            Luma-based text color
           </h2>
           <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Safari uses the{" "}
+            Safari uses{" "}
             <a
               href="https://github.com/andesco/safari-color-tinting/blob/main/luma.md"
               className="font-medium text-blue-600 dark:text-blue-400 underline"
             >
               luma (perceived brightness)
             </a>{" "}
-            of the sampled color to decide whether status bar text should be
-            dark or light.
+            to pick dark or light status bar text.
           </p>
         </div>
       </main>
 
       {/* ---- Control Panel ---- */}
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[200] flex flex-col items-center gap-3">
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[300] flex flex-col items-center gap-3 max-w-[95vw]">
         {/* Scenario indicator */}
-        <div className="rounded-full bg-black/70 px-4 py-1.5 text-xs text-white backdrop-blur-sm">
+        <div className="rounded-full bg-black/70 px-4 py-1.5 text-xs text-white backdrop-blur-sm text-center">
           {scenario}
         </div>
 
-        {/* Nav background color picker */}
+        {/* Status Bar color row */}
         <div className="flex flex-wrap items-center justify-center gap-2 rounded-2xl bg-white/90 px-4 py-3 shadow-lg backdrop-blur-sm dark:bg-zinc-800/90">
-          <span className="mr-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            Nav BG:
+          <span className="mr-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+            Status Bar:
           </span>
-          {PRESET_COLORS.map(({ label, value }) => (
+          {COLORS.map(({ label, value }) => (
             <button
-              key={label}
-              onClick={() => setNavBg(value)}
+              key={"s-" + label}
+              onClick={() => setStatusColor(value)}
               className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
-                navBg === value
+                statusColor === value
+                  ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                  : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Nav Bar color row */}
+        <div className="flex flex-wrap items-center justify-center gap-2 rounded-2xl bg-white/90 px-4 py-3 shadow-lg backdrop-blur-sm dark:bg-zinc-800/90">
+          <span className="mr-1 text-xs font-medium text-blue-600 dark:text-blue-400">
+            Body BG:
+          </span>
+          {COLORS.map(({ label, value }) => (
+            <button
+              key={"b-" + label}
+              onClick={() => setBodyColor(value)}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
+                bodyColor === value
                   ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
                   : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
               }`}
