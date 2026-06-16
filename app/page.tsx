@@ -90,21 +90,35 @@ export default function Home() {
 
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      {/* ---- Tinting Strip (4px, invisible) ---- */}
-      {/* Safari 26 samples this for the status bar color. */}
-      {/* Keep it thin (≥3px), full-width, at the very top. */}
+      {/* ---- Tinting Strip ---- */}
+      {/* Safari 26 height thresholds (empirically tested):        */}
+      {/*   4px  — tints initially, but fades to shadow on scroll   */}
+      {/*   5px+ — tints persist on scroll, but won't auto-switch   */}
+      {/*          colors without the meta-tag "+fe" dance           */}
+      {/*  11px+ — fully reliable: scroll-safe, instant switching,  */}
+      {/*          independent of body bg. ✓                         */}
+      {/*                                                           */}
+      {/* ⚠ Body bg interaction: with overlay ON and body bg set,   */}
+      {/*   the URL bar (navbar) follows body bg. Must toggle       */}
+      {/*   overlay OFF→ON to sync navbar to body bg change.       */}
+      {/* ⚠ Transparent navbar (content visible behind):            */}
+      {/*   overlay must be OFF.                                    */}
+      {/* ⚠ Content under status bar: fixed element with no bg,     */}
+      {/*   but requires page reload to take effect.                */}
+      {/* ⚠ Body bg None + status bar colored: the navbar (URL bar) */}
+      {/*   shows a shadow tint of the status bar color on scroll.  */}
       <div
         aria-hidden="true"
         className="fixed top-0 w-full z-[200] pointer-events-none"
-        style={{ height: "4px", backgroundColor: cssColor(statusColor) }}
+        style={{ height: "11px", backgroundColor: cssColor(statusColor) }}
       />
 
       {/* ---- Visible Header ---- */}
       {/* Its background is what Safari samples for the status bar tint. */}
-      <header
+      {/* <header
         className="fixed top-0 w-full h-24 z-100 transition-colors duration-500 pointer-events-none border"
         style={{ backgroundColor: cssColor(statusColor) }}
-      />
+      /> */}
 
       {/* ---- Safe Zone Enforcer ---- */}
       {overlayVisible && (

@@ -30,7 +30,7 @@ Safari mengambil sampel `background-color` dari elemen yang memenuhi SEMUA krite
 | Positioning | `fixed` atau `sticky` | `fixed` atau `sticky` |
 | Jarak dari atas | ≤ 4px dari atas | ≤ 4px dari atas |
 | Lebar | ≥ 80% viewport | ≥ 90% viewport |
-| Tinggi | ≥ 3px | ≥ 3px |
+| Tinggi | > 4px (minimum 5px) | > 4px (minimum 5px) |
 
 ### Yang Tetap Di-sampling (Mengejutkan)
 
@@ -145,10 +145,10 @@ Pendekatan-pendekatan ini telah diuji dan **gagal** memicu observer Safari:
 Anda tidak perlu header yang terlihat sebagai sumber tinting. **Strip tipis tak terlihat** di bagian paling atas halaman dapat mengontrol status bar secara independen:
 
 ```html
-<!-- Strip 4px tak terlihat — Safari mengambil sampel INI untuk warna status bar -->
+<!-- Strip 11px tak terlihat — Safari mengambil sampel INI untuk warna status bar -->
 <div
   aria-hidden="true"
-  style="position: fixed; top: 0; width: 100%; height: 4px;
+  style="position: fixed; top: 0; width: 100%; height: 11px;
          background-color: #2563eb; pointer-events: none; z-index: 200"
 />
 
@@ -161,12 +161,12 @@ Anda tidak perlu header yang terlihat sebagai sumber tinting. **Strip tipis tak 
 </header>
 ```
 
-**Mengapa 4px?** Ambang batas tinggi minimum Safari adalah 3px. Pada 4px strip dapat di-sampling dengan andal sambil tetap tidak terlihat oleh pengguna.
+**Mengapa 5px?** Ambang batas Safari adalah *lebih dari* 4px — tepat di 4px tint bekerja saat awal tetapi menghilang saat di-scroll. 5px membuatnya tetap di-sampling dengan andal di semua posisi scroll.
 
 ### Diagram Arsitektur
 
 ```
-┌── Tinting Strip (4px, z-200) ──┐  ← Safari sampling INI
+┌── Tinting Strip (5px, z-200) ──┐  ← Safari sampling INI
 ├── Header Terlihat (h-24, z-100) ─┤  ← Pengguna melihat INI (warna bebas)
 │                                  │
 │         Konten Halaman           │  ← Body background (independen)
@@ -212,6 +212,12 @@ Menggunakan dua elemen fixed bersamaan:
 | N/A (header dihapus) | ON | Jatuh ke background `<body>`, konten di safe zone |
 | Apa pun | OFF | Jatuh ke background `<body>` |
 
+### Body BG "None" + Status Bar Berwarna
+
+Saat body background di-set ke **None** (transparan) dan status bar memiliki warna:
+- Saat di-scroll, **navbar (URL bar)** menampilkan **bayangan (shadow)** warna status bar
+- Efek gradien halus — warna status bar "merembes" ke area navbar saat scrolling
+
 ---
 
 ## Inline Styles vs Tailwind Classes
@@ -232,31 +238,72 @@ Menggunakan dua elemen fixed bersamaan:
 
 ---
 
+## Ambang Batas Tinggi: 4px vs 5px vs 11px
+
+Tinggi tinting strip sangat memengaruhi perilaku Safari. Ambang batas ini ditemukan melalui pengujian empiris:
+
+| Tinggi | Tint Awal | Perilaku Scroll | Ganti Warna | Catatan |
+|--------|-----------|-----------------|-------------|---------|
+| **4px** | ✅ Berfungsi | ❌ Memudar jadi bayangan, transparan | N/A | Tidak andal — tint hanya terlihat saat statis |
+| **5px–10px** | ✅ Berfungsi | ✅ Tetap saat scroll | ❌ Tidak otomatis ganti | Perlu tarian meta tag `+ "fe"` setiap kali |
+| **11px+** | ✅ Berfungsi | ✅ Solid saat scroll | ✅ Langsung ganti | Sepenuhnya andal. **Direkomendasikan.** |
+
+### 11px+ Adalah Titik Terbaik
+
+Pada 11px atau lebih:
+- Warna tetap solid saat di-scroll (tidak memudar)
+- Mengganti warna terjadi instan — tidak perlu tarian meta tag (meski tetap membantu)
+- Tint status bar tetap independen dari warna background body
+- Bekerja andal di semua skenario yang diuji
+
+### Interaksi Body Background & Navbar
+
+Dengan overlay **ON** dan body background color di-set:
+- **URL bar** (navbar di bawah status bar) mengikuti warna **body background**
+- Mengubah body background TIDAK langsung memperbarui navbar
+- Harus toggle overlay **OFF → ON** untuk menyinkronkan navbar ke warna body baru
+- **Status bar** tetap benar apa pun yang terjadi
+
+### Navbar Transparan (Konten Terlihat di Belakang)
+
+Untuk membuat navbar transparan agar konten terlihat di belakang URL bar:
+- Overlay harus **OFF**
+- Tanpa overlay, Safari jatuh ke background `<body>` untuk tinting navbar
+
+### Konten di Bawah Status Bar
+
+Agar konten muncul di belakang status bar (edge-to-edge):
+- Tempatkan elemen `position: fixed | sticky` di paling atas dengan **tanpa background color** (transparan)
+- Ini **memerlukan reload halaman** agar berlaku — Safari tidak mendeteksi ini saat runtime
+
+---
+
 ## Poin Penting
 
 1. **`viewport-fit=cover` tidak mengontrol tinting.** Jangan mengandalkannya untuk warna status bar.
 2. **Re-sample saat runtime memerlukan tarian meta tag `+ "fe"`.** Live observer Safari mengabaikan banyak transisi kecuali ditusuk via manipulasi `<meta name="theme-color">`.
 3. **Gunakan inline styles, bukan Tailwind classes.** Properti `background-color` harus selalu ada secara eksplisit agar Safari melacak perubahan.
-4. **Strip fixed 4px di atas** dapat mengontrol status bar secara independen dari header yang terlihat.
+4. **Gunakan minimal 11px untuk tinting strip.** 4px memudar saat scroll, 5–10px tidak otomatis ganti warna. 11px+ sepenuhnya andal.
 5. **`pointer-events: none` tidak mencegah sampling Safari.** Gunakan untuk membuat kontroler tinting yang tidak terlihat.
-6. **Overlay fullscreen** (fixed `inset-0` dengan background transparan) bertindak sebagai safe zone enforcer bersama kontroler tinting.
-7. **Safari menggunakan luma (kecerahan yang dirasakan)** dari warna yang di-sampling untuk menentukan apakah teks/ikon status bar harus gelap atau terang.
+6. **Overlay fullscreen** (fixed `inset-0` dengan background transparan) bertindak sebagai safe zone enforcer. Toggle OFF→ON untuk sinkronisasi navbar body background.
+7. **Konten di bawah status bar** memerlukan elemen fixed transparan + reload halaman untuk aktif.
+8. **Safari menggunakan luma (kecerahan yang dirasakan)** dari warna yang di-sampling untuk menentukan apakah teks/ikon status bar harus gelap atau terang.
 
 ---
 
 ## Penggunaan Praktis
 
 ```tsx
-// Status bar transparan (konten mengalir di belakang)
+// Tinting strip andal (minimal 11px)
 <header style={{
-  position: "fixed", top: 0, width: "100%", height: "4px",
-  backgroundColor: "transparent", pointerEvents: "none"
+  position: "fixed", top: 0, width: "100%", height: "11px",
+  backgroundColor: "#2563eb", pointerEvents: "none"
 }} />
 
-// Status bar berwarna
+// Status bar transparan (konten di belakang — perlu reload halaman)
 <header style={{
-  position: "fixed", top: 0, width: "100%", height: "4px",
-  backgroundColor: "#2563eb", pointerEvents: "none"
+  position: "fixed", top: 0, width: "100%", height: "11px",
+  backgroundColor: "transparent", pointerEvents: "none"
 }} />
 
 // Dengan hook re-sample
@@ -266,7 +313,7 @@ function HalamanSaya() {
 
   return (
     <header style={{
-      position: "fixed", top: 0, width: "100%", height: "4px",
+      position: "fixed", top: 0, width: "100%", height: "11px",
       backgroundColor: color, pointerEvents: "none"
     }} />
   );

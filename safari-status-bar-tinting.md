@@ -30,7 +30,7 @@ Safari samples the `background-color` of elements that meet ALL of these criteri
 | Positioning | `fixed` or `sticky` | `fixed` or `sticky` |
 | Distance from top | ≤ 4px from top | ≤ 4px from top |
 | Width | ≥ 80% of viewport | ≥ 90% of viewport |
-| Height | ≥ 3px | ≥ 3px |
+| Height | > 4px (5px minimum) | > 4px (5px minimum) |
 
 ### What Gets Sampled (Surprisingly)
 
@@ -145,10 +145,10 @@ These approaches were tested and **failed** to trigger Safari's observer:
 You don't need your visible header to be the tinting source. A **thin, invisible strip** at the very top of the page can control the status bar independently:
 
 ```html
-<!-- Invisible 4px strip — Safari samples THIS for status bar color -->
+<!-- Invisible 11px strip — Safari samples THIS for status bar color -->
 <div
   aria-hidden="true"
-  style="position: fixed; top: 0; width: 100%; height: 4px;
+  style="position: fixed; top: 0; width: 100%; height: 11px;
          background-color: #2563eb; pointer-events: none; z-index: 200"
 />
 
@@ -161,12 +161,12 @@ You don't need your visible header to be the tinting source. A **thin, invisible
 </header>
 ```
 
-**Why 4px?** Safari's minimum height threshold is 3px. At 4px the strip is reliably sampled while being invisible to users.
+**Why 5px?** Safari's threshold is *greater than* 4px — at exactly 4px the tint works initially but disappears while scrolling. 5px keeps it reliably sampled at all scroll positions.
 
 ### Architecture Diagram
 
 ```
-┌── Tinting Strip (4px, z-200) ──┐  ← Safari samples THIS
+┌── Tinting Strip (5px, z-200) ──┐  ← Safari samples THIS
 ├── Visible Header (h-24, z-100) ─┤  ← Users see THIS (any color)
 │                                 │
 │         Page Content            │  ← Body background (independent)
@@ -212,6 +212,12 @@ Using two fixed elements together:
 | N/A (header removed) | ON | Falls back to `<body>` background, content in safe zone |
 | Any | OFF | Falls back to `<body>` background |
 
+### Body BG "None" + Colored Status Bar
+
+When body background is set to **None** (transparent) and the status bar has a color:
+- Scrolling causes the **navbar (URL bar)** to show a **shadow tint** matching the status bar color
+- This creates a subtle gradient effect — the status bar color bleeds into the navbar area while scrolling
+
 ---
 
 ## Inline Styles vs Tailwind Classes
@@ -232,31 +238,72 @@ Using two fixed elements together:
 
 ---
 
+## Height Thresholds: 4px vs 5px vs 11px
+
+The tinting strip's height dramatically affects Safari's behavior. These thresholds were discovered through empirical testing:
+
+| Height | Initial Tint | Scroll Behavior | Color Switching | Notes |
+|--------|-------------|-----------------|-----------------|-------|
+| **4px** | ✅ Works | ❌ Fades to shadow, goes transparent | N/A | Unreliable — tint only visible when static |
+| **5px–10px** | ✅ Works | ✅ Persists on scroll | ❌ Won't auto-switch colors | Requires meta tag `+ "fe"` dance every time |
+| **11px+** | ✅ Works | ✅ Solid on scroll | ✅ Instant switching | Fully reliable. **Recommended.** |
+
+### 11px+ Is the Sweet Spot
+
+At 11px or taller:
+- Colors persist solidly during scrolling (no shadow fade)
+- Switching colors is instant — no meta tag dance needed (though it still helps)
+- The status bar tint stays independent of body background color
+- Works reliably across all tested scenarios
+
+### Body Background & Navbar Interaction
+
+With the overlay **ON** and a body background color set:
+- The **URL bar** (navbar below the status bar) follows the **body background** color
+- Changing body background does NOT immediately update the navbar
+- You must toggle the overlay **OFF → ON** to sync the navbar to the new body color
+- The **status bar** stays correct regardless
+
+### Transparent Navbar (Content Visible Behind)
+
+To make the navbar transparent so content is visible behind the URL bar:
+- The overlay must be **OFF**
+- Without the overlay, Safari falls back to `<body>` background for navbar tinting
+
+### Content Under Status Bar
+
+To have content appear behind the status bar (edge-to-edge):
+- Place a `position: fixed | sticky` element at the very top with **no background color** (transparent)
+- This **requires a page reload** to take effect — Safari won't detect this at runtime
+
+---
+
 ## Key Takeaways
 
 1. **`viewport-fit=cover` does not control tinting.** Don't rely on it for status bar color.
 2. **Runtime re-sampling requires the meta tag `+ "fe"` dance.** Safari's live observer ignores many transitions unless poked via `<meta name="theme-color">` manipulation.
 3. **Use inline styles, not Tailwind classes.** The `background-color` property must always be explicitly present for Safari to track changes.
-4. **A 4px fixed strip at the top** can control the status bar independently of your visible header.
+4. **Use 11px minimum for the tinting strip.** 4px fades on scroll, 5–10px won't auto-switch colors. 11px+ is fully reliable.
 5. **`pointer-events: none` does not prevent Safari sampling.** Use it to create invisible tinting controllers.
-6. **The fullscreen overlay** (fixed `inset-0` with transparent background) acts as a safe zone enforcer alongside the tinting controller.
-7. **Safari uses luma (perceived brightness)** of the sampled color to determine whether status bar text/icons should be dark or light.
+6. **The fullscreen overlay** (fixed `inset-0` with transparent background) acts as a safe zone enforcer. Toggle it OFF→ON to sync navbar body background.
+7. **Content under the status bar** requires a transparent fixed element + page reload to activate.
+8. **Safari uses luma (perceived brightness)** of the sampled color to determine whether status bar text/icons should be dark or light.
 
 ---
 
 ## Practical Usage
 
 ```tsx
-// Transparent status bar (content flows behind)
+// Reliable tinting strip (11px minimum)
 <header style={{
-  position: "fixed", top: 0, width: "100%", height: "4px",
-  backgroundColor: "transparent", pointerEvents: "none"
+  position: "fixed", top: 0, width: "100%", height: "11px",
+  backgroundColor: "#2563eb", pointerEvents: "none"
 }} />
 
-// Tinted status bar
+// Transparent status bar (content flows behind — needs page reload)
 <header style={{
-  position: "fixed", top: 0, width: "100%", height: "4px",
-  backgroundColor: "#2563eb", pointerEvents: "none"
+  position: "fixed", top: 0, width: "100%", height: "11px",
+  backgroundColor: "transparent", pointerEvents: "none"
 }} />
 
 // With the re-sample hook
@@ -266,7 +313,7 @@ function MyPage() {
 
   return (
     <header style={{
-      position: "fixed", top: 0, width: "100%", height: "4px",
+      position: "fixed", top: 0, width: "100%", height: "11px",
       backgroundColor: color, pointerEvents: "none"
     }} />
   );
