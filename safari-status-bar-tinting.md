@@ -1,5 +1,8 @@
 # Safari 26 Status Bar Tinting — How It Actually Works
 
+**Live Demo:** [next-webkit-bar.vercel.app](https://next-webkit-bar.vercel.app/)
+**Repository:** [github.com/ianfebi01/next-webkit-bar](https://github.com/ianfebi01/next-webkit-bar)
+
 ## Background
 
 Starting with Safari 26 (macOS & iOS), Apple **abandoned** the `<meta name="theme-color">` approach (used in Safari 15–18) and switched to automatically deriving browser UI colors from the `background-color` of standard page elements — specifically `<body>` or qualifying `position: fixed | sticky` elements.
@@ -31,16 +34,16 @@ Safari samples the `background-color` of elements that meet ALL of these criteri
 
 ### What Gets Sampled (Surprisingly)
 
-- ✅ `visibility: hidden` — **still sampled**
-- ✅ `pointer-events: none` — **still sampled**
-- ✅ Elements partially off-screen (up to `bottom: -8px` with `min-height: 12px`)
+- `visibility: hidden` — **still sampled**
+- `pointer-events: none` — **still sampled**
+- Elements partially off-screen (up to `bottom: -8px` with `min-height: 12px`)
 
 ### What Does NOT Get Sampled
 
-- ❌ `display: none`
-- ❌ `position: absolute` children inside fixed/sticky parents
-- ❌ Pseudo-elements (`::before`, `::after`) on fixed/sticky elements
-- ❌ `backdrop-filter` effects
+- `display: none`
+- `position: absolute` children inside fixed/sticky parents
+- Pseudo-elements (`::before`, `::after`) on fixed/sticky elements
+- `backdrop-filter` effects
 
 ---
 
@@ -65,10 +68,10 @@ Using the following code pattern (from `page.tsx` lines 8–13):
 This element is the **tinting controller** for the status bar.
 
 **Why it works:**
-- `fixed top-0` — positions it at the very top edge (within 4px of top ✅)
-- `w-full` — 100% width (≥ 80% width ✅)
-- `h-24` — 96px tall (≥ 3px height ✅)
-- `pointer-events-none` — Safari still samples it ✅
+- `fixed top-0` — positions it at the very top edge (within 4px of top)
+- `w-full` — 100% width (>= 80% width)
+- `h-24` — 96px tall (>= 3px height)
+- `pointer-events-none` — Safari still samples it
 
 **Behavior:**
 
